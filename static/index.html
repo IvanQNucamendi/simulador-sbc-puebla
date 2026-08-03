@@ -1,0 +1,1545 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SBC Puebla — Explorador de polígonos piloto</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2l12 7v14l-12 7-12-7V9z' fill='%232a78d6'/%3E%3C/svg%3E">
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+
+<style>
+/* ── Tokens ──────────────────────────────────────────────────────────────────
+   El choropleth del mapa usa 4 clases discretas de color fijo (definidas en
+   JS como CLASSES, no como tokens de tema) sobre el valor real de Prioridad.
+   Los escenarios usan los slots categóricos 2/3/7 (orange, aqua, violet),
+   validados all-pairs: CVD ΔE 9.2 light / 9.4 dark. --series-1 (slot 1, blue)
+   es el hue fijo de los charts de una sola serie (desglose, perfil de hex). */
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --page: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+
+  --series-1: #2a78d6;
+  --scen-1: #eb6834;   /* slot 2 — orange */
+  --scen-2: #1baf7a;   /* slot 3 — aqua   */
+  --scen-3: #4a3aa7;   /* slot 7 — violet */
+
+  --good: #0ca30c;
+  --warning: #fab219;
+  --critical: #d03b3b;
+  --shadow: 0 1px 3px rgba(11, 11, 11, .08), 0 8px 24px rgba(11, 11, 11, .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --page: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --series-1: #3987e5;
+    --scen-1: #d95926;
+    --scen-2: #199e70;
+    --scen-3: #9085e9;
+    --good: #0ca30c;
+    --shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 8px 24px rgba(0, 0, 0, .4);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --page: #0d0d0d;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted: #898781;
+  --grid: #2c2c2a;
+  --axis: #383835;
+  --border: rgba(255, 255, 255, 0.10);
+  --series-1: #3987e5;
+  --scen-1: #d95926;
+  --scen-2: #199e70;
+  --scen-3: #9085e9;
+  --shadow: 0 1px 3px rgba(0, 0, 0, .5), 0 8px 24px rgba(0, 0, 0, .4);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text-primary);
+  background: var(--page);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 390px;
+  overflow: hidden;
+}
+
+/* ── Mapa ── */
+#map { height: 100vh; background: var(--page); }
+.leaflet-container { font: inherit; background: var(--page); }
+
+/* ── Panel ── */
+#panel {
+  height: 100vh; overflow-y: auto; background: var(--surface-1);
+  border-left: 1px solid var(--border); padding: 18px 18px 48px;
+}
+#panel > section { margin-bottom: 22px; }
+h1 { font-size: 15px; font-weight: 650; margin: 0 0 2px; letter-spacing: -.01em; }
+.sub { font-size: 12px; color: var(--text-secondary); margin: 0; }
+h2 {
+  font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--text-muted); margin: 0 0 9px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--grid);
+}
+.hint { font-size: 11.5px; color: var(--text-muted); margin: 6px 0 0; }
+
+/* ── Controles ── */
+.seg { display: flex; gap: 2px; background: var(--grid); padding: 2px; border-radius: 8px; }
+.seg button {
+  flex: 1; border: 0; background: transparent; font: inherit; font-size: 12.5px;
+  color: var(--text-secondary); padding: 7px 4px; border-radius: 6px; cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.seg button:hover { background: color-mix(in srgb, var(--surface-1) 55%, transparent); }
+.seg button[aria-pressed="true"] {
+  background: var(--surface-1); color: var(--text-primary); font-weight: 650;
+  box-shadow: 0 1px 2px rgba(11, 11, 11, .10);
+}
+.seg button small { display: block; font-size: 10px; font-weight: 400; color: var(--text-muted); }
+
+.sliderrow { display: flex; align-items: center; gap: 10px; }
+.sliderrow input[type="range"] {
+  flex: 1; accent-color: var(--series-1); height: 4px; cursor: pointer;
+}
+.sliderval {
+  font-size: 12.5px; font-weight: 650; font-variant-numeric: tabular-nums;
+  min-width: 34px; text-align: right; color: var(--text-primary);
+}
+
+.slabel { font-size: 12px; color: var(--text-secondary); flex: none; }
+
+.basemapsel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.basemapsel button {
+  border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
+  font: inherit; font-size: 11.5px; padding: 6px 4px; border-radius: 7px; cursor: pointer;
+}
+.basemapsel button:hover { background: var(--grid); }
+.basemapsel button[aria-pressed="true"] {
+  background: var(--series-1); border-color: var(--series-1); color: #fff; font-weight: 600;
+}
+
+select#varselect {
+  width: 100%; font: inherit; font-size: 12.5px; padding: 7px 9px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 7px;
+  background: var(--surface-1); color: var(--text-primary);
+}
+
+.chk { display: flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
+.chk input { accent-color: var(--series-1); width: 15px; height: 15px; cursor: pointer; }
+
+/* Muestra de línea para la leyenda de transporte */
+.tline { width: 20px; height: 0; flex: none; border-top: 3px solid var(--c); border-radius: 2px; }
+.tline.dashed { border-top-style: dashed; }
+
+.classlegend { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+.classlegend .row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.classlegend .chip {
+  width: 14px; height: 14px; border-radius: 4px; flex: none;
+  border: 1px solid var(--border);
+}
+.classlegend .lbl { color: var(--text-primary); font-weight: 550; }
+.classlegend .rng {
+  margin-left: auto; color: var(--text-secondary); font-variant-numeric: tabular-nums;
+}
+
+.btnrow { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+button.act {
+  border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  font: inherit; font-size: 12px; padding: 7px 11px; border-radius: 7px; cursor: pointer;
+}
+button.act:hover:not(:disabled) { background: var(--grid); }
+button.act:disabled { opacity: .42; cursor: not-allowed; }
+button.act.primary { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+button.act.primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+/* ── Escenarios ── */
+.scen {
+  display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 8px;
+  border: 1px solid var(--border); margin-bottom: 6px; cursor: pointer; background: transparent;
+  width: 100%; font: inherit; color: inherit; text-align: left;
+}
+.scen:hover { background: var(--grid); }
+.scen[aria-current="true"] { border-color: var(--dot); box-shadow: inset 0 0 0 1px var(--dot); }
+.swatch { width: 11px; height: 11px; border-radius: 3px; background: var(--dot); flex: none; }
+.scen .nm { font-size: 12.5px; font-weight: 600; }
+.scen .mt { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.scen .rm {
+  margin-left: auto; border: 0; background: transparent; color: var(--text-muted);
+  cursor: pointer; font-size: 15px; line-height: 1; padding: 2px 5px; border-radius: 5px;
+}
+.scen .rm:hover { background: var(--critical); color: #fff; }
+
+/* ── Métricas ── */
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--grid); border-radius: 8px; overflow: hidden; }
+.tile { background: var(--surface-1); padding: 9px 10px; }
+.tile .k { font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+.tile .v { font-size: 19px; font-weight: 600; letter-spacing: -.02em; margin-top: 1px; }
+.tile .u { font-size: 11px; font-weight: 400; color: var(--text-secondary); }
+
+table.cmp { width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+table.cmp th, table.cmp td { text-align: right; padding: 5px 4px; border-bottom: 1px solid var(--grid); }
+table.cmp th:first-child, table.cmp td:first-child { text-align: left; }
+table.cmp thead th { color: var(--text-muted); font-weight: 600; }
+table.cmp td.lbl { display: flex; align-items: center; gap: 6px; }
+
+/* ── Charts ── */
+svg { display: block; width: 100%; overflow: visible; }
+/* Sin hexágono seleccionado el chart no debe reservar los 150px por defecto. */
+#hexchart:not([viewBox]) { height: 0; }
+.tick-lbl { font-size: 10px; fill: var(--text-muted); }
+.bar-lbl { font-size: 11px; fill: var(--text-primary); font-variant-numeric: tabular-nums; }
+.bar-cat { font-size: 11.5px; fill: var(--text-secondary); }
+
+/* ── Tooltip ── */
+#tip {
+  position: fixed; z-index: 9999; pointer-events: none; opacity: 0;
+  transition: opacity .1s; background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  box-shadow: var(--shadow); font-size: 12px; max-width: 250px;
+}
+#tip .tv { font-size: 16px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+#tip .tl { font-size: 11px; color: var(--text-secondary); }
+#tip .trow { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+#tip .trow span:last-child { font-weight: 600; }
+#tip hr { border: 0; border-top: 1px solid var(--grid); margin: 6px 0 4px; }
+
+/* ── Popup de hexágono (Leaflet, tema) ── */
+.leaflet-popup-content-wrapper, .leaflet-popup-tip {
+  background: var(--surface-1); color: var(--text-primary); box-shadow: var(--shadow);
+}
+.leaflet-popup-close-button { color: var(--text-muted) !important; }
+.leaflet-popup-content { margin: 10px 13px; font: 12px/1.5 inherit; min-width: 190px; }
+.leaflet-popup-content .tv { font-size: 16px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.leaflet-popup-content .tl { font-size: 11px; color: var(--text-secondary); }
+.leaflet-popup-content .trow { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.leaflet-popup-content .trow span:last-child { font-weight: 600; white-space: nowrap; flex: none; }
+.leaflet-popup-content hr { border: 0; border-top: 1px solid var(--grid); margin: 6px 0 4px; }
+
+/* ── Avisos / estado ── */
+.warn {
+  font-size: 11.5px; padding: 8px 10px; border-radius: 7px; margin-top: 8px;
+  background: color-mix(in srgb, var(--warning) 16%, var(--surface-1));
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  display: flex; gap: 7px; align-items: flex-start;
+}
+#status {
+  position: fixed; top: 12px; left: 12px; z-index: 900; background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 13px; font-size: 12.5px;
+  box-shadow: var(--shadow); display: flex; align-items: center; gap: 8px;
+}
+#status.hide { display: none; }
+.spin {
+  width: 12px; height: 12px; border: 2px solid var(--grid); border-top-color: var(--series-1);
+  border-radius: 50%; animation: sp .7s linear infinite; flex: none;
+}
+@keyframes sp { to { transform: rotate(360deg); } }
+.loading { opacity: .45; transition: opacity .15s; }
+
+#themebtn {
+  position: fixed; top: 12px; right: 402px; z-index: 900; width: 32px; height: 32px;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1);
+  cursor: pointer; font-size: 14px; box-shadow: var(--shadow); color: var(--text-primary);
+}
+
+@media (max-width: 900px) {
+  body { grid-template-columns: 1fr; grid-template-rows: 55vh 45vh; overflow: auto; }
+  #map { height: 55vh; }
+  #panel { height: 45vh; border-left: 0; border-top: 1px solid var(--border); }
+  #themebtn { right: 12px; }
+}
+</style>
+
+<div id="map"></div>
+<button id="themebtn" title="Alternar tema claro/oscuro">◐</button>
+<div id="status"><span class="spin"></span><span id="statustxt">Cargando la malla…</span></div>
+<div id="tip" role="tooltip"></div>
+
+<aside id="panel">
+  <section>
+    <h1>Polígonos piloto — SBC Puebla</h1>
+    <p class="sub">Arrastra un marcador en el mapa para reconstruir el polígono
+      por expansión contigua, priorizando los hexágonos de mayor score.</p>
+  </section>
+
+  <section>
+    <h2>Mapa base</h2>
+    <div class="basemapsel" id="basemapsel" role="group" aria-label="Mapa base"></div>
+    <p class="hint" id="basemaphint"></p>
+
+    <div class="sliderrow" style="margin-top:12px">
+      <label for="opacityslider" class="slabel">Opacidad de la malla</label>
+      <input type="range" id="opacityslider" min="0" max="1" step="0.01" value="0.82"
+             aria-label="Opacidad de la malla hexagonal">
+      <span id="opacityval" class="sliderval">82%</span>
+    </div>
+    <p class="hint">Baja la opacidad para ver calles y referencias por debajo de
+      los hexágonos.</p>
+
+    <label class="chk" style="margin-top:10px">
+      <input type="checkbox" id="transittoggle" checked>
+      <span>Mostrar RUTA y Cablebús</span>
+    </label>
+    <div id="transitlegend" class="classlegend" style="margin-top:8px"></div>
+  </section>
+
+  <section>
+    <h2>Tamaño del piloto</h2>
+    <div class="sliderrow">
+      <label for="densityslider" class="slabel">Densidad</label>
+      <input type="range" id="densityslider" min="7" max="12" step="1" value="10"
+             aria-label="Densidad de estaciones por km²">
+      <span id="densityval" class="sliderval">10</span>
+    </div>
+    <div class="sliderrow" style="margin-top:6px">
+      <label for="stationsslider" class="slabel">Estaciones</label>
+      <input type="range" id="stationsslider" min="100" max="150" step="1" value="137"
+             aria-label="Número de estaciones del piloto">
+      <span id="stationsval" class="sliderval">137</span>
+    </div>
+    <p class="hint" id="densityhint"></p>
+    <div class="btnrow">
+      <button class="act" id="basecasebtn">Sistema completo · 137 est · 10/km²</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Compacidad</h2>
+    <div class="sliderrow">
+      <input type="range" id="lambdaslider" min="0" max="1" step="0.05" value="0.3"
+             aria-label="Penalización por distancia al centroide (lambda)">
+      <span id="lambdaval" class="sliderval">0.30</span>
+    </div>
+    <p class="hint">λ = 0 replica el score puro (polígonos alargados por corredores de
+      alta Prioridad); λ = 1 favorece la mancha más compacta posible. Se recalcula
+      al soltar el control.</p>
+  </section>
+
+  <section>
+    <h2>Escenarios <span id="scencount" style="font-weight:400;text-transform:none;letter-spacing:0"></span></h2>
+    <div id="scenlist"></div>
+    <div class="btnrow">
+      <button class="act primary" id="addscen">+ Agregar escenario</button>
+      <button class="act" id="exportbtn">↓ Exportar GeoJSON</button>
+      <button class="act" id="zoomscen">⤢ Encuadrar</button>
+      <button class="act" id="zoomall">⤢ Toda la malla</button>
+    </div>
+    <p class="hint">Hasta 3 polígonos simultáneos. Cada uno tiene su propio marcador
+      arrastrable y su propia densidad.</p>
+  </section>
+
+  <section id="warnbox"></section>
+
+  <section>
+    <h2>Métricas del polígono activo</h2>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section id="cmpsection" hidden>
+    <h2>Comparación de escenarios</h2>
+    <div style="overflow-x:auto"><table class="cmp" id="cmptable"></table></div>
+  </section>
+
+  <section>
+    <h2>Score promedio por variable</h2>
+    <p class="sub" id="bdsub" style="margin-bottom:8px"></p>
+    <svg id="breakdown"></svg>
+    <p class="hint">La barra llena es el promedio del polígono; la pista clara,
+      el peso máximo que puede aportar esa variable.</p>
+  </section>
+
+  <section id="hexsection">
+    <h2>Perfil del hexágono</h2>
+    <p class="sub" id="hexsub" style="margin-bottom:8px">Haz click en cualquier hexágono del mapa.</p>
+    <svg id="hexchart"></svg>
+  </section>
+
+  <section>
+    <h2>Variable en el mapa</h2>
+    <select id="varselect" aria-label="Variable a colorear en el mapa"></select>
+    <p class="sub" id="legsub" style="margin:8px 0 6px"></p>
+    <div id="classlegend" class="classlegend"></div>
+    <svg id="legend"></svg>
+    <div class="btnrow">
+      <button class="act" id="resetfilter" disabled>Limpiar filtro</button>
+    </div>
+    <p class="hint" id="legendhint">Arrastra sobre el histograma para mostrar en el
+      mapa solo los hexágonos en ese rango de score.</p>
+  </section>
+</aside>
+
+<script>
+"use strict";
+
+// ── Constantes de color ──────────────────────────────────────────────────────
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const SCEN_VARS = ["--scen-1", "--scen-2", "--scen-3"];
+const nf = (d = 2) => new Intl.NumberFormat("es-MX", { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmt2 = nf(2), fmt3 = nf(3), fmt1 = nf(1), fmt0 = nf(0);
+
+// Choropleth de 6 clases discretas sobre el valor real de Prioridad (no una
+// rampa continua). Colores fijos e iguales en ambos temas — son la
+// clasificación cartográfica del dato, no un token de UI.
+// Los intervalos son cerrados por la izquierda: el valor 1.0 exacto entra en
+// "baja" (cierra el hueco que dejaba la definición 0<P<1.0 y 1<P<1.2).
+const CLASSES = [
+  { key: "none",  label: "Sin prioridad",      range: "= 0",       color: "#D9D9D9", test: (p) => p === 0 },
+  { key: "vlow",  label: "Prioridad muy baja", range: "0 – 1.0",   color: "#2b83ba", test: (p) => p > 0 && p < 1.0 },
+  { key: "low",   label: "Prioridad baja",     range: "1.0 – 1.2", color: "#abdda4", test: (p) => p >= 1.0 && p < 1.2 },
+  { key: "mid",   label: "Prioridad media",    range: "1.2 – 1.4", color: "#ffffbf", test: (p) => p >= 1.2 && p < 1.4 },
+  { key: "high",  label: "Prioridad alta",     range: "1.4 – 1.6", color: "#fdae61", test: (p) => p >= 1.4 && p < 1.6 },
+  { key: "vhigh", label: "Prioridad muy alta", range: "≥ 1.6",     color: "#d7191c", test: (p) => p >= 1.6 },
+];
+
+// Capas de referencia de transporte masivo. El choropleth ya consume azul,
+// verde, amarillo, naranja y rojo, así que la distinción BRT/Cablebús no puede
+// apoyarse solo en el hue: cada modo lleva además su propio patrón de línea y
+// forma de marcador, y ambos van con orla blanca para leerse sobre cualquier
+// clase del choropleth y sobre el satélite.
+const TRANSIT = {
+  brt:   { label: "RUTA (BRT)", color: "#111111", dash: null,    shape: "circle" },
+  cable: { label: "Cablebús",   color: "#7b1fa2", dash: "7,6",   shape: "square" },
+};
+function classify(p) {
+  for (const c of CLASSES) if (c.test(p)) return c;
+  return CLASSES[CLASSES.length - 1];
+}
+const colorOf = (p) => classify(p).color;
+
+// ── Vista del choropleth: score total o una de las 7 variables ───────────────
+// Cada variable individual solo toma 3 valores (el puntaje crudo es 0, 1 o 2),
+// así que se clasifica en 3 clases reales en vez de reescalar las 6 del score,
+// que dejaría la mitad de la leyenda siempre vacía. Se reusan el gris y los dos
+// colores altos del esquema para no introducir una paleta nueva.
+const VAR_CLASS_COLORS = ["#D9D9D9", "#fdae61", "#d7191c"];
+const VAR_CLASS_LABELS = ["Sin aporte", "Aporte medio", "Aporte alto"];
+
+let viewKey = "total";   // "total" | índice 0-6 de la variable
+let VARMETA = [];
+
+/** Valor que se está mapeando para un hexágono, según la vista activa. */
+function valueOf(props) {
+  if (viewKey === "total") return props.p;
+  const v = props.v;
+  return v ? v[viewKey] * (VARMETA[viewKey].max / 2) : 0;
+}
+
+/** Clases de la vista activa, en el mismo formato que CLASSES. */
+function activeClasses() {
+  if (viewKey === "total") return CLASSES;
+  const m = VARMETA[viewKey];
+  return m.levels.map((lvl, i) => ({
+    key: `l${i}`,
+    label: VAR_CLASS_LABELS[i],
+    range: fmt2.format(lvl),
+    color: VAR_CLASS_COLORS[i],
+    count: m.counts[i],
+  }));
+}
+
+/** Color de un hexágono en la vista activa. */
+function colorForProps(props) {
+  if (viewKey === "total") return colorOf(props.p);
+  return VAR_CLASS_COLORS[props.v ? props.v[viewKey] : 0];
+}
+
+let SCEN_COLORS = [];
+let META = null, MESH = null, quad = null, meshLayer = null;
+let scenarios = [], activeId = null, nextId = 1, filterRange = null, selectedHexId = null;
+
+const el = (id) => document.getElementById(id);
+const tip = el("tip");
+
+// ── Mapa ─────────────────────────────────────────────────────────────────────
+// preferCanvas es indispensable: 16k polígonos en SVG colapsan el navegador.
+const map = L.map("map", { preferCanvas: true, zoomControl: true, minZoom: 9 });
+
+const ATTR_OSM = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+const ATTR_CARTO = `${ATTR_OSM} &copy; <a href="https://carto.com/attributions">CARTO</a>`;
+const ATTR_ESRI = 'Imagery &copy; <a href="https://www.esri.com">Esri</a>, Maxar, Earthstar Geographics';
+const CARTO_LABELS = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png";
+
+// Mapas base. "calles" y "voyager" son los equivalentes libres a Google Maps:
+// OSM trae comercios y puntos de interés; Voyager trae calles, nombres y
+// colonias con mucho menos ruido visual. (Las teselas de Google no se pueden
+// consumir desde un TileLayer: requieren su SDK con llave de facturación.)
+const BASEMAPS = {
+  claro: {
+    label: "Claro", hint: "Neutro, para leer el choropleth",
+    url: "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
+    labels: "https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png",
+    attribution: ATTR_CARTO, subdomains: "abcd", maxZoom: 19,
+  },
+  oscuro: {
+    label: "Oscuro", hint: "Neutro en tema oscuro",
+    url: "https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png",
+    labels: "https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}{r}.png",
+    attribution: ATTR_CARTO, subdomains: "abcd", maxZoom: 19,
+  },
+  calles: {
+    label: "Calles y negocios", hint: "OSM: comercios y puntos de interés",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attribution: ATTR_OSM, subdomains: "", maxZoom: 19,
+  },
+  voyager: {
+    label: "Colonias", hint: "Calles, nombres y zonas, sin saturar",
+    url: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+    attribution: ATTR_CARTO, subdomains: "abcd", maxZoom: 19,
+  },
+  satelite: {
+    label: "Satélite", hint: "Imagen real del terreno",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+    labels: CARTO_LABELS,
+    attribution: ATTR_ESRI, subdomains: "", maxZoom: 19,
+  },
+};
+const THEME_BASEMAPS = new Set(["claro", "oscuro"]);
+
+const isDark = () => (document.documentElement.dataset.theme || "")
+  ? document.documentElement.dataset.theme === "dark"
+  : matchMedia("(prefers-color-scheme: dark)").matches;
+
+const basemap = { base: null, labels: null, key: null };
+function setBasemap(key) {
+  const cfg = BASEMAPS[key];
+  if (!cfg) return;
+  for (const k of ["base", "labels"]) if (basemap[k]) { basemap[k].remove(); basemap[k] = null; }
+  const opts = { attribution: cfg.attribution, maxZoom: cfg.maxZoom };
+  if (cfg.subdomains) opts.subdomains = cfg.subdomains;
+  basemap.base = L.tileLayer(cfg.url, opts).addTo(map);
+  if (cfg.labels) {
+    const lopts = { maxZoom: cfg.maxZoom, pane: "shadowPane" };
+    if (cfg.subdomains || cfg.labels.includes("{s}")) lopts.subdomains = "abcd";
+    basemap.labels = L.tileLayer(cfg.labels, lopts).addTo(map);
+  }
+  basemap.key = key;
+  syncBasemapSelector();
+}
+setBasemap(isDark() ? "oscuro" : "claro");
+
+// La malla lleva su propio renderer para poder atenuarla con la opacidad del
+// <canvas> (compositing por GPU) en vez de repintar 16k polígonos por cada
+// paso del slider.
+const meshRenderer = L.canvas({ padding: 0.3 });
+// Un único renderer compartido para los rellenos de los escenarios: crear uno
+// por redibujo dejaría un <canvas> nuevo en cada arrastre del marcador.
+const hexFillRenderer = L.canvas({ padding: 0.3 });
+
+// Ninguno de esos dos canvas aloja capas interactivas, pero por defecto siguen
+// capturando el puntero y, al estar por encima, se tragaban los tooltips de las
+// estaciones de RUTA y Cablebús.
+function disablePointerEvents(renderer) {
+  const c = renderer._container;
+  if (c) c.style.pointerEvents = "none";
+}
+
+const layers = {
+  mesh: L.layerGroup().addTo(map),
+  outlines: L.layerGroup().addTo(map),
+  hexes: L.layerGroup().addTo(map),
+  transit: L.layerGroup().addTo(map),
+  markers: L.layerGroup().addTo(map),
+  pick: L.layerGroup().addTo(map),
+};
+
+function setStatus(text, busy = true) {
+  const box = el("status");
+  if (!text) { box.classList.add("hide"); return; }
+  box.classList.remove("hide");
+  box.querySelector(".spin").style.display = busy ? "" : "none";
+  el("statustxt").textContent = text;
+}
+
+// ── Tooltip ──────────────────────────────────────────────────────────────────
+function showTip(html, x, y) {
+  tip.innerHTML = html;
+  tip.style.opacity = 1;
+  const r = tip.getBoundingClientRect();
+  tip.style.left = Math.min(x + 14, innerWidth - r.width - 8) + "px";
+  tip.style.top = Math.max(8, Math.min(y - r.height - 12, innerHeight - r.height - 8)) + "px";
+}
+const hideTip = () => { tip.style.opacity = 0; };
+// Los textos de datos van con textContent; nunca concatenados en innerHTML.
+const esc = (s) => { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; };
+
+// ── Carga ────────────────────────────────────────────────────────────────────
+async function boot() {
+  META = await (await fetch("/meta")).json();
+  SCEN_COLORS = SCEN_VARS.map(css);
+  VARMETA = META.variables;
+
+  buildBasemapSelector();
+  buildDensitySelector();
+  buildVarSelector();
+  drawClassLegend();
+  drawLegend();
+  updateLegendSubtitle();
+
+  map.fitBounds([[META.bounds.south, META.bounds.west], [META.bounds.north, META.bounds.east]]);
+
+  setStatus(`Descargando ${fmt0.format(META.n_hexes)} hexágonos…`);
+  MESH = await (await fetch("/data")).json();
+
+  setStatus("Dibujando la malla…");
+  await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+  drawMesh();
+
+  // Índice espacial para hover/click: nearest-centroid, O(log n) por evento.
+  // 16k polígonos interactivos en Leaflet harían el hit-testing inviable.
+  quad = d3.quadtree()
+    .x((f) => f.properties.cx).y((f) => f.properties.cy)
+    .addAll(MESH.features);
+
+  map.on("click", onMapClick);
+
+  // Capas de referencia de transporte masivo (no bloquean el arranque).
+  loadTransit().catch((err) => console.warn("transporte:", err.message));
+
+  setStatus(null);
+
+  // Escenario inicial: Centro Histórico de Puebla.
+  addScenario(19.0438, -98.1982, 10);
+}
+
+function drawMesh() {
+  if (meshLayer) layers.mesh.removeLayer(meshLayer);
+  meshLayer = L.geoJSON(MESH, {
+    interactive: false,
+    renderer: meshRenderer,
+    style: hexStyle,
+  });
+  layers.mesh.addLayer(meshLayer);
+  applyMeshOpacity();
+}
+
+// Atenúa la malla completa vía la opacidad del <canvas>: es compositing por
+// GPU, así que el slider se puede arrastrar en vivo sin repintar 16k polígonos.
+function applyMeshOpacity() {
+  const v = +el("opacityslider").value;
+  el("opacityval").textContent = `${Math.round(v * 100)}%`;
+  const c = meshRenderer._container;
+  if (c) c.style.opacity = v;
+  disablePointerEvents(meshRenderer);
+}
+
+function hexStyle(f) {
+  const props = f.properties;
+  const p = props.p;
+  // El filtro del histograma siempre opera sobre el score total, que es lo
+  // que ese histograma representa.
+  const inFilter = !filterRange || (p >= filterRange[0] && p <= filterRange[1]);
+  if (!inFilter) return { stroke: false, fillOpacity: 0 };
+  return {
+    stroke: true, color: "#ffffff", weight: 0.5, opacity: 0.3,
+    fill: true, fillColor: colorForProps(props), fillOpacity: 0.82,
+  };
+}
+
+// ── Transporte masivo (capas de referencia) ──────────────────────────────────
+let TRANSIT_DATA = null;
+let TRANSIT_TOTALS = { brt: 0, cable: 0 };
+const transitLayers = { lines: null, casing: null, stations: null };
+
+async function loadTransit() {
+  const res = await fetch("/transit");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  TRANSIT_DATA = await res.json();
+  TRANSIT_TOTALS = TRANSIT_DATA.counts || { brt: 0, cable: 0 };
+  drawTransit();
+  drawTransitLegend();
+  renderAll();  // las métricas ya pueden mostrar "N de TOTAL"
+}
+
+function drawTransit() {
+  for (const k of Object.keys(transitLayers)) {
+    if (transitLayers[k]) { transitLayers[k].remove(); transitLayers[k] = null; }
+  }
+  if (!TRANSIT_DATA) return;
+
+  // Orla blanca por debajo: las trazas tienen que leerse igual sobre satélite
+  // que sobre cualquier clase del choropleth.
+  transitLayers.casing = L.geoJSON(TRANSIT_DATA.lines, {
+    interactive: false,
+    style: { color: "#ffffff", weight: 6, opacity: 0.9, lineCap: "round", lineJoin: "round" },
+  }).addTo(layers.transit);
+
+  transitLayers.lines = L.geoJSON(TRANSIT_DATA.lines, {
+    style: (f) => {
+      const m = TRANSIT[f.properties.mode] || TRANSIT.brt;
+      return {
+        color: m.color, weight: 3, opacity: 1,
+        dashArray: m.dash, lineCap: "round", lineJoin: "round",
+      };
+    },
+    onEachFeature: (f, layer) => {
+      const p = f.properties;
+      const m = TRANSIT[p.mode] || TRANSIT.brt;
+      layer.bindTooltip(`${m.label} · ${p.linea} — ${fmt2.format(p.km)} km`, { sticky: true });
+    },
+  }).addTo(layers.transit);
+
+  transitLayers.stations = L.geoJSON(TRANSIT_DATA.stations, {
+    pointToLayer: (f, latlng) => {
+      const m = TRANSIT[f.properties.mode] || TRANSIT.brt;
+      // Cablebús en cuadrado, BRT en círculo: la forma respalda al color.
+      const opts = { color: "#ffffff", weight: 2, fillColor: m.color, fillOpacity: 1 };
+      return m.shape === "square"
+        ? L.rectangle(latlng.toBounds(150), { ...opts, weight: 2.5 })
+        : L.circleMarker(latlng, { ...opts, radius: 4.5 });
+    },
+    onEachFeature: (f, layer) => {
+      const p = f.properties;
+      const m = TRANSIT[p.mode] || TRANSIT.brt;
+      const sub = p.line && p.line !== m.label ? `${m.label} · ${esc(p.line)}` : m.label;
+      layer.bindTooltip(`<b>${esc(p.name)}</b><br>${sub}`);
+    },
+  }).addTo(layers.transit);
+
+  setTransitVisible(el("transittoggle").checked);
+}
+
+function setTransitVisible(on) {
+  if (on) { if (!map.hasLayer(layers.transit)) map.addLayer(layers.transit); }
+  else if (map.hasLayer(layers.transit)) map.removeLayer(layers.transit);
+}
+
+function drawTransitLegend() {
+  const box = el("transitlegend");
+  box.innerHTML = "";
+  if (!TRANSIT_DATA) return;
+  const counts = TRANSIT_DATA.counts || {};
+  for (const [key, m] of Object.entries(TRANSIT)) {
+    const row = document.createElement("div"); row.className = "row";
+    const sw = document.createElement("span");
+    sw.className = "tline";
+    sw.style.setProperty("--c", m.color);
+    if (m.dash) sw.classList.add("dashed");
+    const lbl = document.createElement("span"); lbl.className = "lbl"; lbl.textContent = m.label;
+    const n = document.createElement("span"); n.className = "rng";
+    n.textContent = `${fmt0.format(counts[key] || 0)} est.`;
+    row.append(sw, lbl, n);
+    box.appendChild(row);
+  }
+}
+
+// ── Click sobre la malla ─────────────────────────────────────────────────────
+// Sin hover: el tooltip por mousemove generaba ruido al recorrer el mapa.
+// Un clic hace un único fetch a /hex/{id} y alimenta tanto el popup fijo de
+// Leaflet como el panel lateral (mismo dato, sin pedirlo dos veces).
+const R_DEG = 0.0014; // ~150 m: menos que el spacing de 250 m, evita falsos aciertos
+
+function nearestHex(latlng) {
+  if (!quad) return null;
+  return quad.find(latlng.lng, latlng.lat, R_DEG) || null;
+}
+
+function percentile(v) {
+  const h = META.histogram; let below = 0, total = 0;
+  for (let i = 0; i < h.counts.length; i++) { total += h.counts[i]; if (h.edges[i + 1] <= v) below += h.counts[i]; }
+  return total ? (below / total) * 100 : 0;
+}
+
+let hexPopup = null;
+function showHexPopup(p, latlng) {
+  if (hexPopup) { hexPopup.remove(); hexPopup = null; }
+  const owners = scenarios.filter((s) => s.hexSet && s.hexSet.has(p.id));
+  let rows = "";
+  for (const v of p.variables) {
+    rows += `<div class="trow"><span>${esc(v.label)}</span><span>${fmt2.format(v.value)} / ${fmt2.format(v.max)}</span></div>`;
+  }
+  let ownerRows = "";
+  for (const s of owners) {
+    ownerRows += `<div class="trow"><span style="color:${s.color}">■ ${esc(s.name)}</span><span>dentro</span></div>`;
+  }
+  const html =
+    `<div class="tv">${fmt2.format(p.prioridad)}</div>` +
+    `<div class="tl">Prioridad · hexágono ${esc(String(p.id))} · percentil ${fmt0.format(percentile(p.prioridad))}º</div>` +
+    `<hr>${rows}` + (ownerRows ? `<hr>${ownerRows}` : "");
+  hexPopup = L.popup({ maxWidth: 270, className: "hexpopup", autoPanPadding: [20, 20] })
+    .setLatLng(latlng)
+    .setContent(html)
+    .openOn(map);
+}
+
+async function onMapClick(e) {
+  const f = nearestHex(e.latlng);
+  if (!f) return;
+  const hexId = f.properties.id;
+  try {
+    const res = await fetch(`/hex/${hexId}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const p = await res.json();
+    selectedHexId = hexId;
+    drawPickMarker(p);
+    renderHexProfile(p);
+    showHexPopup(p, e.latlng);
+    el("hexsection").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (err) {
+    el("hexsub").textContent = `No se pudo cargar el hexágono ${hexId}: ${err.message}`;
+  }
+}
+
+// ── Selector de densidad ─────────────────────────────────────────────────────
+// ── Selector de mapa base ────────────────────────────────────────────────────
+function buildBasemapSelector() {
+  const box = el("basemapsel");
+  box.innerHTML = "";
+  for (const [key, cfg] of Object.entries(BASEMAPS)) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.key = key;
+    b.textContent = cfg.label;
+    b.title = cfg.hint;
+    b.setAttribute("aria-pressed", String(basemap.key === key));
+    b.onclick = () => setBasemap(key);
+    box.appendChild(b);
+  }
+  syncBasemapSelector();
+}
+function syncBasemapSelector() {
+  const box = el("basemapsel");
+  if (!box) return;
+  for (const b of box.children) b.setAttribute("aria-pressed", String(b.dataset.key === basemap.key));
+  const cfg = BASEMAPS[basemap.key];
+  if (cfg) el("basemaphint").textContent = cfg.hint;
+}
+
+/** Hexágonos que implica una combinación densidad × estaciones. */
+const hexesFor = (density, stations) =>
+  Math.round(stations / density / META.hex_area_nominal);
+
+function buildDensitySelector() {
+  const [dmin, dmax] = META.density_range;
+  const [smin, smax] = META.stations_range;
+  Object.assign(el("densityslider"), { min: dmin, max: dmax });
+  Object.assign(el("stationsslider"), { min: smin, max: smax });
+  el("basecasebtn").textContent =
+    `Sistema completo · ${META.stations_total} est · 10/km²`;
+  syncDensitySelector();
+}
+
+/** Refleja el estado del escenario activo en ambos sliders y su resumen. */
+function syncDensitySelector() {
+  const s = active();
+  const density = s ? s.density : 10;
+  const stations = s ? s.stations : META.stations_total;
+  el("densityslider").value = density;
+  el("stationsslider").value = stations;
+  previewSize(density, stations);
+}
+
+/** Resumen en vivo: los hexágonos y el área se derivan, no se piden. */
+function previewSize(density, stations) {
+  el("densityval").textContent = fmt0.format(density);
+  el("stationsval").textContent = fmt0.format(stations);
+  const n = hexesFor(density, stations);
+  el("densityhint").textContent =
+    `${fmt0.format(n)} hexágonos · ${fmt2.format(n * META.hex_area_km2)} km² · ` +
+    `${fmt3.format(META.hex_area_km2)} km² por hexágono.`;
+}
+
+const DEFAULT_LAMBDA = 0.3;
+function syncLambdaSlider() {
+  const s = active();
+  const lam = s ? s.lambda : DEFAULT_LAMBDA;
+  el("lambdaslider").value = lam;
+  el("lambdaval").textContent = fmt2.format(lam);
+}
+
+// ── Escenarios ───────────────────────────────────────────────────────────────
+const active = () => scenarios.find((s) => s.id === activeId) || null;
+
+function addScenario(lat, lon, density, lambda = DEFAULT_LAMBDA, stations = null) {
+  if (scenarios.length >= 3) return;
+  const used = new Set(scenarios.map((s) => s.slot));
+  const slot = [0, 1, 2].find((i) => !used.has(i));
+  const s = {
+    id: nextId++, slot, color: SCEN_COLORS[slot],
+    name: `Escenario ${slot + 1}`, lat, lon, density, lambda,
+    stations: stations ?? META.stations_total,
+    result: null, hexSet: null, marker: null, outline: null, hexLayer: null,
+  };
+
+  s.marker = L.marker([lat, lon], {
+    draggable: true, autoPan: true, keyboard: true,
+    title: `${s.name} — arrastra para recolocar el centroide`,
+    icon: L.divIcon({
+      className: "", iconSize: [22, 22], iconAnchor: [11, 11],
+      html: `<div style="width:22px;height:22px;border-radius:50%;background:${s.color};
+             border:3px solid var(--surface-1);box-shadow:0 1px 5px rgba(0,0,0,.45);cursor:grab;
+             display:grid;place-items:center;color:#fff;font:650 11px system-ui">${slot + 1}</div>`,
+    }),
+  }).addTo(layers.markers);
+
+  s.marker.on("dragstart", () => { setActive(s.id); hideTip(); });
+  s.marker.on("dragend", () => {
+    const ll = s.marker.getLatLng();
+    s.lat = ll.lat; s.lon = ll.lng;
+    recompute(s);
+  });
+  s.marker.on("click", () => setActive(s.id));
+
+  scenarios.push(s);
+  setActive(s.id);
+  recompute(s);
+  renderScenarios();
+}
+
+function removeScenario(id) {
+  const i = scenarios.findIndex((s) => s.id === id);
+  if (i < 0) return;
+  const s = scenarios[i];
+  for (const l of [s.marker, s.outline, s.hexLayer]) if (l) l.remove();
+  scenarios.splice(i, 1);
+  if (activeId === id) activeId = scenarios.length ? scenarios[0].id : null;
+  renderAll();
+}
+
+function setActive(id) {
+  activeId = id;
+  renderScenarios();
+  syncDensitySelector();
+  syncLambdaSlider();
+  renderMetrics();
+  restyleScenarios();
+}
+
+async function recompute(s) {
+  el("panel").classList.add("loading");
+  setStatus(`Construyendo ${s.name}…`);
+  try {
+    const res = await fetch("/polygon", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lat: s.lat, lon: s.lon, density: s.density,
+        stations: s.stations, lambda_val: s.lambda,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    s.result = await res.json();
+    s.hexSet = new Set(s.result.hex_ids);
+    drawScenario(s);
+    setStatus(null);
+  } catch (err) {
+    setStatus(`Error al construir el polígono: ${err.message}`, false);
+    setTimeout(() => setStatus(null), 4000);
+  } finally {
+    el("panel").classList.remove("loading");
+    renderAll();
+  }
+}
+
+function drawScenario(s) {
+  const first = !s.outline;
+  if (s.outline) s.outline.remove();
+  if (s.hexLayer) s.hexLayer.remove();
+
+  // Hexágonos miembros: un lavado, no un bloque saturado — el choropleth de
+  // abajo tiene que seguir leyéndose dentro del polígono.
+  s.hexLayer = L.geoJSON(s.result.hexes, {
+    interactive: false, renderer: hexFillRenderer,
+    style: { stroke: false, fillColor: s.color, fillOpacity: 0.14 },
+  }).addTo(layers.hexes);
+  disablePointerEvents(hexFillRenderer);
+
+  // Contorno disuelto: el trazo es lo que identifica al escenario.
+  s.outline = L.geoJSON(s.result.outline, {
+    interactive: false,
+    style: { color: s.color, weight: 3, opacity: 1, fill: false, lineJoin: "round" },
+  }).addTo(layers.outlines);
+
+  // Solo en el primer polígono: encuadrar. Después el usuario manda en el zoom.
+  if (first && scenarios.length === 1) {
+    map.fitBounds(s.outline.getBounds().pad(0.6), { animate: false });
+  }
+  restyleScenarios();
+}
+
+function restyleScenarios() {
+  for (const s of scenarios) {
+    const isActive = s.id === activeId;
+    if (s.outline) s.outline.setStyle({ weight: isActive ? 3.5 : 2, opacity: isActive ? 1 : 0.75 });
+    if (s.hexLayer) s.hexLayer.setStyle({ fillOpacity: isActive ? 0.16 : 0.08 });
+    if (s.marker) s.marker.setOpacity(isActive ? 1 : 0.75);
+  }
+}
+
+function renderScenarios() {
+  const box = el("scenlist");
+  box.innerHTML = "";
+  el("scencount").textContent = `${scenarios.length}/3`;
+  for (const s of scenarios) {
+    const m = s.result && s.result.metrics;
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "scen";
+    row.style.setProperty("--dot", s.color);
+    row.setAttribute("aria-current", String(s.id === activeId));
+    row.onclick = () => setActive(s.id);
+
+    const sw = document.createElement("span"); sw.className = "swatch";
+    const txt = document.createElement("span");
+    const nm = document.createElement("div"); nm.className = "nm"; nm.textContent = s.name;
+    const mt = document.createElement("div"); mt.className = "mt";
+    mt.textContent = m
+      ? `${m.stations_target} est · ${m.density}/km² · λ${fmt2.format(m.lambda_val)} · ` +
+        `${m.n_hexes} hex · μ ${fmt2.format(m.score_mean)}`
+      : "calculando…";
+    txt.append(nm, mt);
+    row.append(sw, txt);
+
+    if (scenarios.length > 1) {
+      const rm = document.createElement("button");
+      rm.className = "rm"; rm.type = "button"; rm.textContent = "×";
+      rm.title = `Quitar ${s.name}`;
+      rm.onclick = (ev) => { ev.stopPropagation(); removeScenario(s.id); };
+      row.appendChild(rm);
+    }
+    box.appendChild(row);
+  }
+  el("addscen").disabled = scenarios.length >= 3;
+  el("exportbtn").disabled = !(active() && active().result);
+}
+
+// ── Métricas ─────────────────────────────────────────────────────────────────
+function renderMetrics() {
+  const s = active(), box = el("tiles"), wb = el("warnbox");
+  wb.innerHTML = "";
+  if (!s || !s.result) { box.innerHTML = ""; return; }
+  const m = s.result.metrics;
+
+  const tiles = [
+    ["Área", fmt2.format(m.area_km2), "km²"],
+    ["Hexágonos", fmt0.format(m.n_hexes), `de ${m.target_hexes}`],
+    ["Score promedio", fmt3.format(m.score_mean), `de ${fmt2.format(META.score_max)}`],
+    ["Rango de score", `${fmt2.format(m.score_min)}–${fmt2.format(m.score_max)}`, ""],
+    ["Estaciones SBC", fmt0.format(m.stations), `de ${m.stations_target} a ${m.density}/km²`],
+    ["Compacidad", fmt2.format(m.compactness), "Polsby-Popper"],
+  ];
+  if (m.stations_transit != null) {
+    tiles.push(
+      ["Estaciones RUTA", fmt0.format(m.stations_brt), `de ${fmt0.format(TRANSIT_TOTALS.brt)}`],
+      ["Estaciones Cablebús", fmt0.format(m.stations_cable), `de ${fmt0.format(TRANSIT_TOTALS.cable)}`],
+    );
+  }
+  box.innerHTML = "";
+  for (const [k, v, u] of tiles) {
+    const d = document.createElement("div"); d.className = "tile";
+    const kk = document.createElement("div"); kk.className = "k"; kk.textContent = k;
+    const vv = document.createElement("div"); vv.className = "v"; vv.textContent = v;
+    if (u) { const uu = document.createElement("span"); uu.className = "u"; uu.textContent = " " + u; vv.appendChild(uu); }
+    d.append(kk, vv); box.appendChild(d);
+  }
+
+  const warns = [...(s.result.warnings || [])];
+  // Un piloto muy alargado es operativamente malo aunque el score sea alto.
+  if (m.compactness < 0.18)
+    warns.push(`Polígono poco compacto (${fmt2.format(m.compactness)}): la expansión ` +
+      `siguió un corredor de score alto en lugar de una mancha redondeada. ` +
+      `Sube la compacidad (λ) si necesitas una forma más operable.`);
+  // El saneamiento garantiza 0 huecos; si alguno apareciera hay que verlo.
+  if (m.holes > 0)
+    warns.push(`El polígono quedó con ${fmt0.format(m.holes)} hueco(s) interior(es). ` +
+      `No debería ocurrir: repórtalo.`);
+  if (m.parts > 1)
+    warns.push(`El polígono quedó partido en ${fmt0.format(m.parts)} fragmentos.`);
+  if (m.thin_hexes > 0)
+    warns.push(`${fmt0.format(m.thin_hexes)} hexágono(s) del borde quedan unidos por ` +
+      `solo 2 lados. Exigir un conteo exacto lo hace inevitable en algunos casos; ` +
+      `mover un poco el centroide suele resolverlo.`);
+  for (const w of warns) {
+    const d = document.createElement("div"); d.className = "warn";
+    const i = document.createElement("span"); i.textContent = "⚠";
+    const t = document.createElement("span"); t.textContent = w;
+    d.append(i, t); wb.appendChild(d);
+  }
+}
+
+function renderCompare() {
+  const sec = el("cmpsection"), t = el("cmptable");
+  const ready = scenarios.filter((s) => s.result);
+  if (ready.length < 2) { sec.hidden = true; return; }
+  sec.hidden = false;
+
+  const rows = [
+    ["Estaciones objetivo", (m) => fmt0.format(m.stations_target)],
+    ["Densidad (est/km²)", (m) => fmt0.format(m.density)],
+    ["λ (compacidad)", (m) => fmt2.format(m.lambda_val)],
+    ["Hexágonos", (m) => fmt0.format(m.n_hexes)],
+    ["Área (km²)", (m) => fmt2.format(m.area_km2)],
+    ["Score promedio", (m) => fmt3.format(m.score_mean)],
+    ["Score mínimo", (m) => fmt2.format(m.score_min)],
+    ["Score máximo", (m) => fmt2.format(m.score_max)],
+    ["Score acumulado", (m) => fmt0.format(m.score_sum)],
+    ["Perímetro (km)", (m) => fmt2.format(m.perimeter_km)],
+    ["Compacidad", (m) => fmt2.format(m.compactness)],
+  ];
+  if (ready.some((s) => s.result.metrics.stations_transit != null)) {
+    rows.push(
+      ["Estaciones RUTA", (m) => fmt0.format(m.stations_brt ?? 0)],
+      ["Estaciones Cablebús", (m) => fmt0.format(m.stations_cable ?? 0)],
+    );
+  }
+  t.innerHTML = "";
+  const thead = t.createTHead().insertRow();
+  thead.appendChild(document.createElement("th"));
+  for (const s of ready) {
+    const th = document.createElement("th");
+    const sw = document.createElement("span");
+    sw.className = "swatch"; sw.style.setProperty("--dot", s.color);
+    th.append(sw, document.createTextNode(" " + s.name));
+    th.style.display = "flex"; th.style.alignItems = "center"; th.style.gap = "5px";
+    th.style.justifyContent = "flex-end";
+    thead.appendChild(th);
+  }
+  const tb = t.createTBody();
+  for (const [label, fn] of rows) {
+    const tr = tb.insertRow();
+    const th = document.createElement("th"); th.scope = "row"; th.textContent = label;
+    th.style.fontWeight = "400"; th.style.color = "var(--text-secondary)";
+    tr.appendChild(th);
+    for (const s of ready) tr.insertCell().textContent = fn(s.result.metrics);
+  }
+}
+
+// ── Chart: desglose por variable (barras horizontales, una serie) ────────────
+function renderBreakdown() {
+  const s = active();
+  const svg = d3.select("#breakdown");
+  svg.selectAll("*").remove();
+  if (!s || !s.result) { el("bdsub").textContent = ""; return; }
+
+  const data = s.result.metrics.breakdown;
+  el("bdsub").textContent =
+    `${s.name} · las 7 barras suman el score promedio de ${fmt3.format(s.result.metrics.score_mean)}`;
+
+  const W = svg.node().clientWidth || 350;
+  const rowH = 27, padL = 118, padR = 46, H = data.length * rowH + 22;
+  svg.attr("viewBox", `0 0 ${W} ${H}`).attr("height", H);
+  const innerW = W - padL - padR;
+  const x = d3.scaleLinear().domain([0, d3.max(data, (d) => d.max)]).range([0, innerW]);
+  const barH = 13; // marca delgada, muy por debajo del tope de 24px
+
+  const g = svg.selectAll("g.row").data(data).join("g")
+    .attr("class", "row").attr("transform", (d, i) => `translate(0,${i * rowH + 8})`);
+
+  g.append("text").attr("class", "bar-cat").attr("x", padL - 8).attr("y", barH / 2)
+    .attr("dy", "0.34em").attr("text-anchor", "end")
+    .text((d) => d.label.length > 20 ? d.label.slice(0, 19) + "…" : d.label);
+
+  // Pista: el peso máximo que la variable puede aportar.
+  g.append("rect").attr("x", padL).attr("y", 0).attr("height", barH).attr("rx", 4)
+    .attr("width", (d) => x(d.max)).attr("fill", "var(--grid)");
+
+  // Barra: promedio observado. Serie única → un solo hue, sin caja de leyenda.
+  g.append("rect").attr("x", padL).attr("y", 0).attr("height", barH)
+    .attr("rx", 4).attr("width", 0).attr("fill", "var(--series-1)")
+    .transition().duration(320).attr("width", (d) => Math.max(1, x(d.mean)));
+
+  g.append("text").attr("class", "bar-lbl").attr("y", barH / 2).attr("dy", "0.34em")
+    .attr("x", (d) => padL + x(d.max) + 6)
+    .text((d) => `${fmt2.format(d.mean)} / ${fmt2.format(d.max)}`);
+
+  // Hit target generoso: toda la fila, no solo la barra pintada.
+  g.append("rect").attr("x", padL).attr("y", -6).attr("height", rowH)
+    .attr("width", innerW).attr("fill", "transparent").style("cursor", "crosshair")
+    .on("pointermove", (ev, d) => showTip(
+      `<div class="tv">${fmt3.format(d.mean)}</div><div class="tl">${esc(d.label)} — promedio</div><hr>` +
+      `<div class="trow"><span>Peso máximo</span><span>${fmt2.format(d.max)}</span></div>` +
+      `<div class="trow"><span>% del máximo</span><span>${fmt0.format(d.share_of_max * 100)}%</span></div>` +
+      `<div class="trow"><span>% del score</span><span>${fmt0.format(d.share_of_score * 100)}%</span></div>`,
+      ev.clientX, ev.clientY))
+    .on("pointerleave", hideTip);
+}
+
+// ── Chart: perfil del hexágono ───────────────────────────────────────────────
+function drawPickMarker(p) {
+  layers.pick.clearLayers();
+  L.circleMarker([p.lat, p.lon], {
+    radius: 7, color: "var(--text-primary)", weight: 2,
+    fillColor: colorOf(p.prioridad), fillOpacity: 1, interactive: false,
+  }).addTo(layers.pick);
+}
+
+function renderHexProfile(p) {
+  const s = active();
+  const owners = scenarios.filter((sc) => sc.hexSet && sc.hexSet.has(p.id)).map((sc) => sc.name);
+  el("hexsub").textContent =
+    `Hexágono ${p.id} · Prioridad ${fmt2.format(p.prioridad)} (percentil ${fmt0.format(percentile(p.prioridad))}º)` +
+    (owners.length ? ` · dentro de: ${owners.join(", ")}` : " · fuera de todo polígono");
+
+  const svg = d3.select("#hexchart");
+  svg.selectAll("*").remove();
+  const data = p.variables;
+  const meanByKey = new Map((s && s.result) ? s.result.metrics.breakdown.map((b) => [b.key, b.mean]) : []);
+
+  const W = svg.node().clientWidth || 350;
+  const rowH = 27, padL = 118, padR = 46, H = data.length * rowH + 34;
+  svg.attr("viewBox", `0 0 ${W} ${H}`).attr("height", H);
+  const innerW = W - padL - padR;
+  const x = d3.scaleLinear().domain([0, d3.max(data, (d) => d.max)]).range([0, innerW]);
+  const barH = 13;
+
+  const g = svg.selectAll("g.row").data(data).join("g")
+    .attr("class", "row").attr("transform", (d, i) => `translate(0,${i * rowH + 8})`);
+
+  g.append("text").attr("class", "bar-cat").attr("x", padL - 8).attr("y", barH / 2)
+    .attr("dy", "0.34em").attr("text-anchor", "end")
+    .text((d) => d.label.length > 20 ? d.label.slice(0, 19) + "…" : d.label);
+
+  g.append("rect").attr("x", padL).attr("y", 0).attr("height", barH).attr("rx", 4)
+    .attr("width", (d) => x(d.max)).attr("fill", "var(--grid)");
+
+  // Serie única (una barra por variable de este hexágono): un solo hue fijo,
+  // igual que el chart de desglose — el color no re-codifica la magnitud
+  // (eso ya lo muestra la longitud de la barra).
+  g.append("rect").attr("x", padL).attr("y", 0).attr("height", barH).attr("rx", 4)
+    .attr("width", (d) => Math.max(1, x(d.value)))
+    .attr("fill", (d) => d.value > 0 ? "var(--series-1)" : "var(--axis)");
+
+  // Referencia: promedio del polígono activo, como marca de 2px.
+  g.filter((d) => meanByKey.has(d.key)).append("line")
+    .attr("x1", (d) => padL + x(meanByKey.get(d.key))).attr("x2", (d) => padL + x(meanByKey.get(d.key)))
+    .attr("y1", -3).attr("y2", barH + 3)
+    .attr("stroke", "var(--text-primary)").attr("stroke-width", 2).attr("stroke-linecap", "round");
+
+  g.append("text").attr("class", "bar-lbl").attr("y", barH / 2).attr("dy", "0.34em")
+    .attr("x", (d) => padL + x(d.max) + 6)
+    .text((d) => fmt2.format(d.value));
+
+  g.append("rect").attr("x", padL).attr("y", -6).attr("height", rowH)
+    .attr("width", innerW).attr("fill", "transparent").style("cursor", "crosshair")
+    .on("pointermove", (ev, d) => showTip(
+      `<div class="tv">${fmt2.format(d.value)}</div><div class="tl">${esc(d.label)}</div><hr>` +
+      `<div class="trow"><span>Puntaje crudo</span><span>${fmt0.format(d.raw)}</span></div>` +
+      `<div class="trow"><span>Peso máximo</span><span>${fmt2.format(d.max)}</span></div>` +
+      (meanByKey.has(d.key)
+        ? `<div class="trow"><span>Promedio del polígono</span><span>${fmt2.format(meanByKey.get(d.key))}</span></div>` : ""),
+      ev.clientX, ev.clientY))
+    .on("pointerleave", hideTip);
+
+  svg.append("text").attr("class", "tick-lbl").attr("x", padL).attr("y", H - 4)
+    .text(s && s.result ? "│ = promedio del polígono activo" : "");
+}
+
+// ── Leyenda: histograma que ES la escala de color, con brush de filtro ──────
+function drawClassLegend() {
+  const box = el("classlegend");
+  box.innerHTML = "";
+  for (const c of activeClasses()) {
+    const row = document.createElement("div"); row.className = "row";
+    const chip = document.createElement("span"); chip.className = "chip"; chip.style.background = c.color;
+    const lbl = document.createElement("span"); lbl.className = "lbl"; lbl.textContent = c.label;
+    const rng = document.createElement("span"); rng.className = "rng";
+    rng.textContent = c.count != null
+      ? `${c.range}  ·  ${fmt0.format(c.count)} hex`
+      : c.range;
+    row.append(chip, lbl, rng);
+    box.appendChild(row);
+  }
+}
+
+// ── Selector de variable ─────────────────────────────────────────────────────
+function buildVarSelector() {
+  const sel = el("varselect");
+  sel.innerHTML = "";
+  const total = document.createElement("option");
+  total.value = "total";
+  total.textContent = "Score total (Prioridad)";
+  sel.appendChild(total);
+  VARMETA.forEach((v, i) => {
+    const o = document.createElement("option");
+    o.value = String(i);
+    o.textContent = `${v.label}  (peso ${fmt2.format(v.max)})`;
+    sel.appendChild(o);
+  });
+  sel.onchange = () => setView(sel.value === "total" ? "total" : +sel.value);
+}
+
+function setView(key) {
+  viewKey = key;
+  // El histograma y su brush describen el score total; al ver una variable
+  // suelta el filtro dejaría de corresponder con lo que se muestra.
+  if (filterRange) {
+    filterRange = null;
+    el("resetfilter").disabled = true;
+  }
+  drawClassLegend();
+  drawLegend();
+  updateLegendSubtitle();
+  if (meshLayer) meshLayer.setStyle(hexStyle);
+}
+
+function updateLegendSubtitle() {
+  if (viewKey === "total") {
+    el("legsub").textContent =
+      `${fmt0.format(META.n_hexes)} hexágonos · score ${fmt2.format(META.score_min)}–` +
+      `${fmt2.format(META.score_max)} · promedio ${fmt3.format(META.score_mean)}`;
+  } else {
+    const m = VARMETA[viewKey];
+    const aporta = m.counts[1] + m.counts[2];
+    el("legsub").textContent =
+      `${m.label} · aporta hasta ${fmt2.format(m.max)} al score · ` +
+      `${fmt0.format(aporta)} hexágonos con aporte (${fmt1.format(aporta / META.n_hexes * 100)}%)`;
+  }
+}
+
+/** Distribución de una variable individual: 3 barras, una por nivel. */
+function drawVarLevels(svg) {
+  const m = VARMETA[viewKey];
+  const data = m.levels.map((lvl, i) => ({
+    label: VAR_CLASS_LABELS[i],
+    value: lvl,
+    count: m.counts[i],
+    color: VAR_CLASS_COLORS[i],
+  }));
+
+  const W = svg.node().clientWidth || 350;
+  const rowH = 26, padL = 96, padR = 58, H = data.length * rowH + 10;
+  svg.attr("viewBox", `0 0 ${W} ${H}`).attr("height", H);
+  const innerW = W - padL - padR;
+  // Raíz cuadrada: el nivel 0 tiene 10-15x más hexágonos y aplastaría el resto.
+  const x = d3.scaleSqrt().domain([0, d3.max(data, (d) => d.count)]).range([0, innerW]);
+  const barH = 13;
+
+  const g = svg.selectAll("g.row").data(data).join("g")
+    .attr("class", "row").attr("transform", (d, i) => `translate(0,${i * rowH + 6})`);
+
+  g.append("text").attr("class", "bar-cat").attr("x", padL - 8).attr("y", barH / 2)
+    .attr("dy", "0.34em").attr("text-anchor", "end").text((d) => d.label);
+
+  g.append("rect").attr("x", padL).attr("y", 0).attr("height", barH).attr("rx", 4)
+    .attr("width", (d) => Math.max(2, x(d.count))).attr("fill", (d) => d.color);
+
+  g.append("text").attr("class", "bar-lbl").attr("y", barH / 2).attr("dy", "0.34em")
+    .attr("x", (d) => padL + Math.max(2, x(d.count)) + 6)
+    .text((d) => fmt0.format(d.count));
+
+  g.append("rect").attr("x", padL).attr("y", -6).attr("height", rowH)
+    .attr("width", innerW).attr("fill", "transparent").style("cursor", "crosshair")
+    .on("pointermove", (ev, d) => showTip(
+      `<div class="tv">${fmt0.format(d.count)}</div>` +
+      `<div class="tl">hexágonos · ${esc(d.label)}</div><hr>` +
+      `<div class="trow"><span>Aporte al score</span><span>${fmt2.format(d.value)}</span></div>` +
+      `<div class="trow"><span>% de la malla</span><span>${fmt1.format(d.count / META.n_hexes * 100)}%</span></div>`,
+      ev.clientX, ev.clientY))
+    .on("pointerleave", hideTip);
+}
+
+function drawLegend() {
+  const svg = d3.select("#legend");
+  svg.selectAll("*").remove();
+  // En modo variable el histograma de 40 bins no aplica: el dato solo tiene 3
+  // niveles, así que la distribución se lee mejor como 3 barras.
+  const isVar = viewKey !== "total";
+  // `display:flex` del CSS gana sobre el atributo `hidden`, así que se oculta
+  // por estilo en vez de por atributo.
+  el("resetfilter").parentElement.style.display = isVar ? "none" : "";
+  el("legendhint").style.display = isVar ? "none" : "";
+  if (isVar) return drawVarLevels(svg);
+  const h = META.histogram;
+  const W = svg.node().clientWidth || 350, H = 108, padB = 20, padL = 2, padR = 2;
+  svg.attr("viewBox", `0 0 ${W} ${H}`).attr("height", H);
+
+  const innerW = W - padL - padR, innerH = H - padB;
+  const x = d3.scaleLinear().domain([0, h.edges[h.edges.length - 1]]).range([padL, padL + innerW]);
+  // Escala sqrt: el bin del score 0 es enorme y aplastaría todo lo demás.
+  const y = d3.scaleSqrt().domain([0, d3.max(h.counts)]).range([innerH, 2]);
+
+  const bars = svg.append("g");
+  bars.selectAll("rect").data(h.counts).join("rect")
+    .attr("x", (d, i) => x(h.edges[i]) + 0.5)
+    .attr("width", (d, i) => Math.max(1, x(h.edges[i + 1]) - x(h.edges[i]) - 1.5)) // gap de superficie
+    .attr("y", (d) => y(d)).attr("height", (d) => innerH - y(d))
+    .attr("rx", 2)
+    // Por el borde izquierdo, no el punto medio: las clases son intervalos
+    // cerrados por la izquierda y el primer bin (dominado por Prioridad
+    // exactamente 0) debe leer "Sin prioridad", no "Prioridad baja".
+    .attr("fill", (d, i) => colorOf(h.edges[i]));
+
+  svg.append("line").attr("x1", padL).attr("x2", padL + innerW)
+    .attr("y1", innerH + 0.5).attr("y2", innerH + 0.5)
+    .attr("stroke", "var(--axis)").attr("stroke-width", 1);
+
+  const axis = svg.append("g").attr("transform", `translate(0,${innerH})`);
+  for (const t of x.ticks(6)) {
+    axis.append("text").attr("class", "tick-lbl").attr("x", x(t)).attr("y", 13)
+      .attr("text-anchor", "middle").text(fmt2.format(t));
+  }
+  svg.append("text").attr("class", "tick-lbl").attr("x", padL + innerW).attr("y", H - 2)
+    .attr("text-anchor", "end").text("Prioridad →");
+
+  // Brush: filtra el mapa por rango de score.
+  const brush = d3.brushX()
+    .extent([[padL, 0], [padL + innerW, innerH]])
+    .on("end", (ev) => {
+      if (!ev.selection) { filterRange = null; el("resetfilter").disabled = true; }
+      else {
+        filterRange = ev.selection.map(x.invert).map((v) => Math.round(v * 1000) / 1000);
+        el("resetfilter").disabled = false;
+      }
+      if (meshLayer) meshLayer.setStyle(hexStyle);
+    });
+  const bg = svg.append("g").attr("class", "brush").call(brush);
+  bg.selectAll(".selection").attr("fill", "var(--text-primary)").attr("fill-opacity", .07)
+    .attr("stroke", "var(--text-primary)").attr("stroke-width", 1).attr("stroke-opacity", .35);
+
+  // Hover por bin sobre toda la altura, no solo la barra pintada.
+  svg.append("g").selectAll("rect").data(h.counts).join("rect")
+    .attr("x", (d, i) => x(h.edges[i])).attr("y", 0)
+    .attr("width", (d, i) => Math.max(1, x(h.edges[i + 1]) - x(h.edges[i])))
+    .attr("height", innerH).attr("fill", "transparent").style("pointer-events", "none");
+
+  el("resetfilter").onclick = () => {
+    filterRange = null;
+    el("resetfilter").disabled = true;
+    bg.call(brush.move, null);
+    if (meshLayer) meshLayer.setStyle(hexStyle);
+  };
+}
+
+// ── Exportar ─────────────────────────────────────────────────────────────────
+el("exportbtn").onclick = () => {
+  const s = active();
+  if (!s || !s.result) return;
+  const m = s.result.metrics;
+  // Los atributos de una feature deben ser escalares: el desglose por variable
+  // y el listado de estaciones son anidados y romperían la tabla de atributos
+  // en QGIS. Van solo en `metadata`, no en `properties`.
+  const { breakdown, transit_stations, ...flat } = m;
+  const fc = {
+    type: "FeatureCollection",
+    name: `sbc_puebla_piloto_${m.density}est_km2`,
+    crs: { type: "name", properties: { name: "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+    metadata: {
+      generado: new Date().toISOString(),
+      escenario: s.name,
+      centroide_solicitado: { lat: s.lat, lon: s.lon },
+      centroide_poligono: s.result.centroid,
+      algoritmo: "expansión greedy contigua por score efectivo " +
+                 "(Prioridad − λ·dist/2500m; adyacencia ≤ 260 m entre centroides)",
+      ...m,
+    },
+    features: [
+      { ...s.result.outline, properties: { ...s.result.outline.properties, ...flat, escenario: s.name } },
+      ...s.result.hexes.features,
+    ],
+  };
+  const blob = new Blob([JSON.stringify(fc, null, 2)], { type: "application/geo+json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `sbc_puebla_piloto_${m.density}estkm2_${m.n_hexes}hex.geojson`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+el("zoomscen").onclick = () => {
+  const s = active();
+  if (s && s.outline) map.fitBounds(s.outline.getBounds().pad(0.6));
+};
+el("zoomall").onclick = () =>
+  map.fitBounds([[META.bounds.south, META.bounds.west], [META.bounds.north, META.bounds.east]]);
+
+el("addscen").onclick = () => {
+  const s = active();
+  // Desplaza el nuevo marcador para que no quede tapado por el anterior.
+  const lat = s ? s.lat + 0.012 : 19.0438, lon = s ? s.lon + 0.012 : -98.1982;
+  addScenario(lat, lon, s ? s.density : 10, s ? s.lambda : DEFAULT_LAMBDA,
+              s ? s.stations : META.stations_total);
+};
+
+// Solo recalcula al soltar el control (evento "change"), nunca en "input",
+// para no disparar un POST /polygon en cada pixel de arrastre del slider.
+el("lambdaslider").addEventListener("input", () => {
+  el("lambdaval").textContent = fmt2.format(+el("lambdaslider").value);
+});
+el("lambdaslider").addEventListener("change", () => {
+  const s = active();
+  if (!s) return;
+  s.lambda = +el("lambdaslider").value;
+  recompute(s);
+});
+
+// La opacidad sí va en vivo ("input"): solo cambia una propiedad CSS del
+// canvas, no hay recálculo ni petición al backend que valga la pena diferir.
+el("opacityslider").addEventListener("input", applyMeshOpacity);
+
+// Densidad y estaciones: el resumen se actualiza en vivo, pero el polígono se
+// reconstruye solo al soltar, igual que con λ.
+for (const id of ["densityslider", "stationsslider"]) {
+  el(id).addEventListener("input", () =>
+    previewSize(+el("densityslider").value, +el("stationsslider").value));
+  el(id).addEventListener("change", () => {
+    const s = active();
+    if (!s) return;
+    s.density = +el("densityslider").value;
+    s.stations = +el("stationsslider").value;
+    recompute(s);
+  });
+}
+
+el("basecasebtn").onclick = () => {
+  const s = active();
+  if (!s) return;
+  s.density = 10;
+  s.stations = META.stations_total;
+  syncDensitySelector();
+  recompute(s);
+};
+
+el("transittoggle").addEventListener("change", (ev) => setTransitVisible(ev.target.checked));
+
+// ── Tema ─────────────────────────────────────────────────────────────────────
+el("themebtn").onclick = () => {
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+  document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark";
+  // El tema solo arrastra al basemap si el usuario sigue en uno de los dos
+  // neutros; si eligió satélite, OSM o Voyager, se respeta su elección.
+  if (THEME_BASEMAPS.has(basemap.key)) setBasemap(isDark() ? "oscuro" : "claro");
+  // Los tokens cambian: re-leer los hex y repintar todo lo que los usa.
+  requestAnimationFrame(() => {
+    SCEN_COLORS = SCEN_VARS.map(css);
+    for (const s of scenarios) {
+      s.color = SCEN_COLORS[s.slot];
+      if (s.result) drawScenario(s);
+      s.marker.getElement().firstChild.style.background = s.color;
+    }
+    if (meshLayer) { meshLayer.setStyle(hexStyle); applyMeshOpacity(); }
+    drawLegend();
+    renderAll();
+  });
+};
+
+function renderAll() {
+  renderScenarios();
+  renderMetrics();
+  renderCompare();
+  renderBreakdown();
+  restyleScenarios();
+  syncDensitySelector();
+  syncLambdaSlider();
+  if (selectedHexId != null) fetch(`/hex/${selectedHexId}`).then((r) => r.json()).then(renderHexProfile).catch(() => {});
+}
+
+addEventListener("resize", () => { if (META) { renderBreakdown(); drawLegend(); } });
+
+boot().catch((err) => setStatus(`Error al iniciar: ${err.message}`, false));
+</script>

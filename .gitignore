@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+insumosAPP/Rutas_Estaciones/
+*.log
+.DS_Store
+.claude/
