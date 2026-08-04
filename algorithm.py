@@ -31,7 +31,7 @@ SEED_FALLBACK_RADII_M = (500.0, 1_000.0, 2_500.0, 5_000.0)
 # Radio de búsqueda de referencia para normalizar la penalización por
 # distancia (spec original: "mínimo 2,500 m para tener hexágonos suficientes").
 SEARCH_RADIUS_M = 2_500.0
-DEFAULT_LAMBDA = 0.3
+DEFAULT_LAMBDA = 0.75
 
 # --- Saneamiento de la forma ---------------------------------------------------
 # Bono de cohesión: cada candidato suma β·(lados_en_contacto/6) a su score

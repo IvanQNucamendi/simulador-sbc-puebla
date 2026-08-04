@@ -92,7 +92,9 @@ body {
   border-left: 1px solid var(--border); padding: 18px 18px 48px;
 }
 #panel > section { margin-bottom: 22px; }
+.titlerow { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 h1 { font-size: 15px; font-weight: 650; margin: 0 0 2px; letter-spacing: -.01em; }
+#itdplogo { height: 26px; width: auto; flex: none; }
 .sub { font-size: 12px; color: var(--text-secondary); margin: 0; }
 h2 {
   font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .07em;
@@ -274,7 +276,10 @@ svg { display: block; width: 100%; overflow: visible; }
 
 <aside id="panel">
   <section>
-    <h1>Polígonos piloto — SBC Puebla</h1>
+    <div class="titlerow">
+      <h1>Polígonos piloto — SBC Puebla</h1>
+      <img id="itdplogo" src="/static/img/itdp-verde.png" alt="ITDP">
+    </div>
     <p class="sub">Arrastra un marcador en el mapa para reconstruir el polígono
       por expansión contigua, priorizando los hexágonos de mayor score.</p>
   </section>
@@ -286,9 +291,9 @@ svg { display: block; width: 100%; overflow: visible; }
 
     <div class="sliderrow" style="margin-top:12px">
       <label for="opacityslider" class="slabel">Opacidad de la malla</label>
-      <input type="range" id="opacityslider" min="0" max="1" step="0.01" value="0.82"
+      <input type="range" id="opacityslider" min="0" max="1" step="0.01" value="0.50"
              aria-label="Opacidad de la malla hexagonal">
-      <span id="opacityval" class="sliderval">82%</span>
+      <span id="opacityval" class="sliderval">50%</span>
     </div>
     <p class="hint">Baja la opacidad para ver calles y referencias por debajo de
       los hexágonos.</p>
@@ -304,9 +309,9 @@ svg { display: block; width: 100%; overflow: visible; }
     <h2>Tamaño del piloto</h2>
     <div class="sliderrow">
       <label for="densityslider" class="slabel">Densidad</label>
-      <input type="range" id="densityslider" min="7" max="12" step="1" value="10"
+      <input type="range" id="densityslider" min="7" max="12" step="1" value="9"
              aria-label="Densidad de estaciones por km²">
-      <span id="densityval" class="sliderval">10</span>
+      <span id="densityval" class="sliderval">9</span>
     </div>
     <div class="sliderrow" style="margin-top:6px">
       <label for="stationsslider" class="slabel">Estaciones</label>
@@ -323,13 +328,14 @@ svg { display: block; width: 100%; overflow: visible; }
   <section>
     <h2>Compacidad</h2>
     <div class="sliderrow">
-      <input type="range" id="lambdaslider" min="0" max="1" step="0.05" value="0.3"
+      <input type="range" id="lambdaslider" min="0" max="1" step="0.05" value="0.75"
              aria-label="Penalización por distancia al centroide (lambda)">
-      <span id="lambdaval" class="sliderval">0.30</span>
+      <span id="lambdaval" class="sliderval">0.75</span>
     </div>
-    <p class="hint">λ = 0 replica el score puro (polígonos alargados por corredores de
-      alta Prioridad); λ = 1 favorece la mancha más compacta posible. Se recalcula
-      al soltar el control.</p>
+    <p class="hint">λ = 0 favorece polígonos alargados por corredores de alta
+      prioridad; λ = 1 favorece la mancha más compacta posible. Se recomiendan
+      valores entre 0.60 y 0.85. La forma del sistema se recalcula al colocar
+      el centroide en una nueva ubicación.</p>
   </section>
 
   <section>
@@ -516,6 +522,14 @@ const isDark = () => (document.documentElement.dataset.theme || "")
   ? document.documentElement.dataset.theme === "dark"
   : matchMedia("(prefers-color-scheme: dark)").matches;
 
+// Logo ITDP: blanco sobre tema oscuro, verde sobre tema claro, para que
+// siempre contraste con el fondo del panel.
+const ITDP_LOGO = { light: "/static/img/itdp-verde.png", dark: "/static/img/itdp-blanco.png" };
+function syncLogo() {
+  el("itdplogo").src = isDark() ? ITDP_LOGO.dark : ITDP_LOGO.light;
+}
+syncLogo();
+
 const basemap = { base: null, labels: null, key: null };
 function setBasemap(key) {
   const cfg = BASEMAPS[key];
@@ -532,7 +546,7 @@ function setBasemap(key) {
   basemap.key = key;
   syncBasemapSelector();
 }
-setBasemap(isDark() ? "oscuro" : "claro");
+setBasemap("calles");
 
 // La malla lleva su propio renderer para poder atenuarla con la opacidad del
 // <canvas> (compositing por GPU) en vez de repintar 16k polígonos por cada
@@ -614,8 +628,8 @@ async function boot() {
 
   setStatus(null);
 
-  // Escenario inicial: Centro Histórico de Puebla.
-  addScenario(19.0438, -98.1982, 10);
+  // Escenario inicial: hexágono 17233.
+  addScenario(19.045372, -98.201347, 9);
 }
 
 function drawMesh() {
@@ -838,7 +852,7 @@ function buildDensitySelector() {
 /** Refleja el estado del escenario activo en ambos sliders y su resumen. */
 function syncDensitySelector() {
   const s = active();
-  const density = s ? s.density : 10;
+  const density = s ? s.density : 9;
   const stations = s ? s.stations : META.stations_total;
   el("densityslider").value = density;
   el("stationsslider").value = stations;
@@ -855,7 +869,7 @@ function previewSize(density, stations) {
     `${fmt3.format(META.hex_area_km2)} km² por hexágono.`;
 }
 
-const DEFAULT_LAMBDA = 0.3;
+const DEFAULT_LAMBDA = 0.75;
 function syncLambdaSlider() {
   const s = active();
   const lam = s ? s.lambda : DEFAULT_LAMBDA;
@@ -1460,8 +1474,8 @@ el("zoomall").onclick = () =>
 el("addscen").onclick = () => {
   const s = active();
   // Desplaza el nuevo marcador para que no quede tapado por el anterior.
-  const lat = s ? s.lat + 0.012 : 19.0438, lon = s ? s.lon + 0.012 : -98.1982;
-  addScenario(lat, lon, s ? s.density : 10, s ? s.lambda : DEFAULT_LAMBDA,
+  const lat = s ? s.lat + 0.012 : 19.045372, lon = s ? s.lon + 0.012 : -98.201347;
+  addScenario(lat, lon, s ? s.density : 9, s ? s.lambda : DEFAULT_LAMBDA,
               s ? s.stations : META.stations_total);
 };
 
@@ -1514,6 +1528,7 @@ el("themebtn").onclick = () => {
   // El tema solo arrastra al basemap si el usuario sigue en uno de los dos
   // neutros; si eligió satélite, OSM o Voyager, se respeta su elección.
   if (THEME_BASEMAPS.has(basemap.key)) setBasemap(isDark() ? "oscuro" : "claro");
+  syncLogo();
   // Los tokens cambian: re-leer los hex y repintar todo lo que los usa.
   requestAnimationFrame(() => {
     SCEN_COLORS = SCEN_VARS.map(css);
